@@ -16,6 +16,8 @@ const TZ = 7 * 3600; // Asia/Ho_Chi_Minh, không có DST
 const DAY = 86400;
 
 function loadConfig() {
+  if (!fs.existsSync(CONFIG_PATH))
+    throw new Error(`Chưa có ${CONFIG_PATH}. Copy header \`cookie\` của một request tới booking.base.vn rồi chạy \`node set-cookie.js\` (xem README).`);
   return JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"));
 }
 
