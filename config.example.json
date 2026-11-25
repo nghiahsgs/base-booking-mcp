@@ -1,0 +1,6 @@
+{
+  "base_url": "https://booking.base.vn",
+  "cookie": "PASTE_YOUR_BASE_COOKIE_HERE",
+  "hiring_url": "https://hiring.base.vn",
+  "timeoff_url": "https://timeoff.base.vn"
+}
