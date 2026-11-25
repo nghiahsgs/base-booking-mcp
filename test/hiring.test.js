@@ -204,9 +204,46 @@ test("hiring_weekly_report: đếm đúng sự kiện trong tuần, markdown kh�
   assert.match(text, /- Hồ sơ mới: 1\n- Chuyển vòng: 1\n- Offer: 1\n- Tuyển được: 1\n- Bị loại: 1/);
   assert.match(text, /Chuyển vòng: 1 \(Ứng Viên Chuyển Vòng: Apply sang Technical Interview\)/);
   assert.match(text, /T5 26\/11\/2026 14:00 \(online, 60 phút\): Ứng Viên Chuyển Vòng, job Backend Developer, vòng hiện tại: Technical Interview, người phỏng vấn: interviewer\.a, địa điểm: Teams/);
-  assert.match(text, /Ứng Viên Đọng, job Backend Developer, vòng Apply: 24 ngày/);
+  assert.match(text, /- Backend Developer: 1 hồ sơ đọng\n  - Ứng Viên Đọng, vòng Apply: 24 ngày/);
   assert.doesNotMatch(text, /^\|/m); // không có bảng markdown
   assert.doesNotMatch(text, /example\.com|0900000000|SECRET-TOKEN/);
+});
+
+test("báo cáo tuần: một người nộp 2 job chỉ tính 1 người, tên viết một kiểu", () => {
+  const a = openingData({}, [rawCandidate("1", "Nguyen Van Gia", STAGES[0], at("24/11/2026"), at("24/11/2026"), { email: "gia@example.com" })]);
+  const b = openingData({ id: "101", name: "Frontend Developer", codename: "ACME-002" }, [
+    rawCandidate("9", "Nguyễn Văn Giả", STAGES[0], at("25/11/2026"), at("25/11/2026"), { email: "GIA@example.com", opening_id: "101" }),
+  ]);
+  const text = R.buildWeeklyReport([a, b], [], { range: D.weekRange(NOW), now: NOW });
+  assert.match(text, /- Hồ sơ mới: 2 hồ sơ của 1 người \(1 hồ sơ là của người đã nộp job khác trong tuần\)/);
+  assert.strictEqual((text.match(/Hồ sơ mới: 1 \(Nguyễn Văn Giả\)/g) || []).length, 2);
+  assert.doesNotMatch(text, /Nguyen Van Gia|example\.com/);
+  // trùng tên nhưng email khác nhau -> hai người khác nhau
+  const c = openingData({ id: "102", name: "QA" }, [
+    rawCandidate("7", "Nguyễn Văn Giả", STAGES[0], at("25/11/2026"), at("25/11/2026"), { email: "khac@example.com", opening_id: "102" }),
+  ]);
+  assert.match(R.buildWeeklyReport([a, c], [], { range: D.weekRange(NOW), now: NOW }), /- Hồ sơ mới: 2\n/);
+});
+
+test("báo cáo tuần: hồ sơ đọng gom theo job, quá giới hạn thì gom 1 dòng tổng", () => {
+  const many = Array.from({ length: 8 }, (_, i) =>
+    rawCandidate(String(50 + i), `Hồ Sơ Kho ${i}`, STAGES[0], at("01/09/2026"), at("01/09/2026") + i * 86400)
+  );
+  const d = openingData({ name: "Kho hồ sơ chung", codename: "POOL" }, many);
+  const text = R.buildWeeklyReport([d], [], { range: D.weekRange(NOW), now: NOW, stalePerJob: 3 });
+  assert.match(text, /- Kho hồ sơ chung: 8 hồ sơ đọng/);
+  assert.strictEqual((text.match(/^  - Hồ Sơ Kho/gm) || []).length, 3);
+  assert.match(text, /Hồ Sơ Kho 0, vòng Apply/); // đọng lâu nhất đứng đầu
+  assert.match(text, /Còn 5 hồ sơ khác\. Xem đủ bằng hiring_pipeline với opening="POOL"/);
+  const all = R.buildWeeklyReport([d], [], { range: D.weekRange(NOW), now: NOW, stalePerJob: 0 });
+  assert.strictEqual((all.match(/^  - Hồ Sơ Kho/gm) || []).length, 8);
+});
+
+test("interviewCoverage: nói rõ Base trả bao nhiêu buổi và trong khoảng nào", () => {
+  const page = [D.normalizeInterview({ id: "1", time: String(at("13/10/2026")) }), D.normalizeInterview({ id: "2", time: String(at("28/08/2026")) })];
+  const note = R.interviewCoverage(page, [openingData()]);
+  assert.match(note, /trả 2 buổi mà tài khoản này thấy được, từ 28\/08\/2026 đến 13\/10\/2026/);
+  assert.match(note, /1 ứng viên trong các job đang xét có gắn lịch phỏng vấn/);
 });
 
 test("collectInterviews: lấy lịch gắn trên ứng viên khi trang /interviews không có", () => {

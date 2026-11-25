@@ -21,7 +21,7 @@ Báo cáo tuyển dụng:
 
 - `hiring_list_openings` — danh sách job: tên, mã job, công ty, trạng thái, deadline, tổng ứng viên, số đang xử lý / offer / đã tuyển / bị loại, số ứng viên ở từng vòng. Lọc `status` (`open` mặc định = mọi job chưa Closed, `public`, `internal`, `closed`, `all`) và `company`.
 - `hiring_pipeline` — pipeline của một job (`opening`: id, mã job, hoặc một phần tên) hoặc gộp mọi job của một công ty (`company`). Liệt kê ứng viên đang xử lý (không gồm Rejected) nhóm theo vòng, mỗi người có tên, vị trí hiện tại, nguồn, ngày nộp, ngày cập nhật cuối. Đánh dấu hồ sơ **đọng** (không cập nhật quá `stale_days`, mặc định 7) và job đã đóng nhưng còn ứng viên chưa chuyển sang Rejected.
-- `hiring_weekly_report` — báo cáo tuần (thứ Hai đến Chủ nhật, giờ VN) cho mọi job đang mở hoặc một `company`: hồ sơ mới, chuyển vòng, offer, tuyển được, bị loại, lịch phỏng vấn trong tuần, hồ sơ đọng. Trả markdown không có bảng để dán thẳng vào email hoặc Teams. `week_of` chọn tuần khác.
+- `hiring_weekly_report` — báo cáo tuần (thứ Hai đến Chủ nhật, giờ VN) cho mọi job đang mở hoặc một `company`: hồ sơ mới, chuyển vòng, offer, tuyển được, bị loại, lịch phỏng vấn trong tuần, hồ sơ đọng. Trả markdown không có bảng để dán thẳng vào email hoặc Teams. `week_of` chọn tuần khác. Một người nộp nhiều job trong tuần được đếm là nhiều hồ sơ nhưng một người, và tên hiển thị thống nhất một cách viết (ưu tiên bản có dấu). Hồ sơ đọng gom theo job: mỗi job liệt kê `stale_per_job` hồ sơ đọng lâu nhất (mặc định 5, 0 = hết), phần còn lại gom một dòng tổng.
 - `hiring_interview_schedule` — lịch phỏng vấn theo khoảng ngày (`from`, `to`, mặc định 7 ngày từ hôm nay): ứng viên, job, vòng hiện tại, giờ, hình thức, người phỏng vấn, địa điểm.
 
 Ứng viên:
@@ -31,11 +31,23 @@ Báo cáo tuyển dụng:
 - `hiring_read_cv` — tải file đính kèm rồi tách text (PDF, DOCX). Mặc định lấy PDF đầu tiên, chọn file khác bằng `file_index`. `save_file=true` lưu file ra thư mục tạm và trả đường dẫn để Claude đọc trực tiếp (dùng cho PDF scan hoặc máy không tách được text).
 - `hiring_get_comments` — bình luận nội bộ về ứng viên (ai viết, lúc nào, nội dung).
 
+Loại job khỏi báo cáo (ví dụ job kho hồ sơ chung): truyền `exclude_openings` (mảng id, mã job, hoặc một phần tên) cho `hiring_weekly_report` / `hiring_pipeline`. Muốn loại cố định, thêm vào `config.json`:
+
+```json
+"hiring_report_exclude": ["Career at Scandinavian Software Park"]
+```
+
+Gọi đích danh một job bằng `opening` thì job đó không bị loại.
+
 Tham số `candidate` nhận id (vd `123456`) hoặc tên (không cần dấu, vd `nguyen van a`). Ba tool `hiring_get_candidate`, `hiring_read_cv`, `hiring_get_comments` tìm ứng viên ở mọi job tài khoản xem được: tab Chia sẻ trước, rồi các job đang mở, rồi các job đã đóng. Thêm `opening` để giới hạn một job.
 
 Ví dụ câu hỏi: "Đang có mấy job mở, mỗi job bao nhiêu ứng viên?", "Pipeline của công ty X thế nào, hồ sơ nào bị đọng?", "Tuần này có những buổi phỏng vấn nào?", "Làm báo cáo tuyển dụng tuần này để gửi sếp."
 
 ⚠️ **Thông tin liên hệ ẩn theo mặc định.** Email và số điện thoại của ứng viên chỉ trả về khi gọi với `include_contact=true` (`hiring_list_candidates`, `hiring_get_candidate`, `hiring_pipeline`). CCCD, token và các trường khác của Base không bao giờ trả về. Thay đổi so với bản 1.0: trước đây `hiring_list_candidates` và `hiring_get_candidate` luôn in email và số điện thoại.
+
+⚠️ **`hiring_read_cv` trả nguyên văn nội dung CV**, mà CV thường có sẵn email, số điện thoại, địa chỉ của ứng viên. `include_contact` chỉ điều khiển các trường liên hệ của Base, không che nội dung file.
+
+⚠️ **Số "phỏng vấn" trong `hiring_list_openings` là tổng từ trước đến nay của job** (`stats.interviews.total`), không phải số buổi của một tuần. `hiring_interview_schedule` chỉ liệt kê các buổi rơi vào khoảng ngày được hỏi, và luôn ghi kèm Base đã trả bao nhiêu buổi, từ ngày nào đến ngày nào, để biết tool đã đọc được lịch thật.
 
 ⚠️ **Phạm vi phụ thuộc quyền của tài khoản.** Tài khoản HR hoặc người phụ trách job thấy được trang Job (`/openings`, `/opening/{id}`) thì các tool đọc toàn bộ. Tài khoản chỉ được share ứng viên (trang Job rỗng) thì các tool tự lùi về tab Chia sẻ: vẫn có danh sách job và số đếm theo vòng của cả job, nhưng pipeline, báo cáo tuần và lịch phỏng vấn chỉ tính trên các ứng viên được chia sẻ. Kết quả luôn ghi rõ khi đang ở chế độ này.
 
@@ -88,12 +100,12 @@ Code chia 4 file: `hiring-data.js` (gọi trang, đọc `Client.pageData`, chu�
 - Bình luận: POST urlencoded `/ajax/api/comment/load` với `hid` + `token` của ứng viên (có sẵn trong candidate object) + bộ CSRF `__code`/`__otp`/`__sessionid`. Trả `{code:1, origin:<candidate>, comments:[...]}`. Content là HTML -> phải decode entity (`&gt;`, `&#9794` không có dấu `;`) và strip tag.
 - `stats.comments` trên candidate có thể lớn hơn số comment API trả (vd counter 2, đọc được 1). Không phải phân trang — thử `method=older/all` đều trả `code:0`, comment không có reply. Nhiều khả năng counter tính cả comment đã xoá. Tool nói rõ chỗ chênh thay vì giấu.
 - Cookie chết: `GET` bất kỳ trên hiring.base.vn redirect (`res.url`) sang `account.base.vn/a/login?app=hiring&return=...`, trang có `<title>Đăng nhập - Base Account</title>`.
-- Trang Job (thêm 25/11/2026): `GET /openings` có `pageData.openings[]` (`id`, `name`, `codename`, `status`: 10 Public, 7 Internal, -1 Closed, `deadline`, `group_export.name` = công ty, `stats`) và `opening_requests[]`. `GET /opening/{id}` có `pageData.candidates[]` và `pageData.stages[]`. `GET /interviews` có `pageData.interviews[]` (giờ, hình thức, `followers` = người phỏng vấn, `opening_id`, `candidate_id`).
+- Trang Job (thêm 25/11/2026): `GET /openings` có `pageData.openings[]` (`id`, `name`, `codename`, `status`: 10 Public, 7 Internal, -1 Closed, `deadline`, `group_export.name` = công ty, `stats`) và `opening_requests[]`. `GET /opening/{id}` có `pageData.candidates[]` và `pageData.stages[]`. `GET /interviews` có `pageData.interviews[]` (giờ, hình thức, `followers` = người phỏng vấn, `opening_id`, `candidate_id`), gồm cả buổi đã qua, phân trang bằng `?page=N` và không báo tổng số trang (đọc tới khi trang mới không thêm buổi nào). `/interviews/upcoming` chỉ trả buổi sắp tới.
 - Khối `Client.pageData` đầu tiên của các trang này là `{}`. Phải chọn khối có đúng mảng cần đọc (`pickPageData(html, "openings")`), không lấy khối đầu.
 - Tab Chia sẻ phân trang 20 người / trang, đọc tiếp bằng `?page=N` (`total_pages` trong pageData). `?p=`, `?per_page=` không có tác dụng.
 - Phân loại ứng viên theo `state` của vòng (`active`, `offered`, `hired`, `failed`), không theo tên vòng vì mỗi job đặt tên một kiểu. Số đếm theo vòng nằm ở `stats` (trang Job) hoặc `xstats` (tab Chia sẻ), cùng một dạng: `{total, stages:[{id,name,total,state}], interviews:{total}}`.
 - Sự kiện trong tuần lấy từ `changelogs[]` của ứng viên: bản ghi có `data.stage_in` là một lần vào vòng, có thêm `data.stage_out` là chuyển vòng, `data.stage_in_state` cho biết offer / hired / failed.
-- ⚠️ **Phần đã kiểm chứng và phần chưa.** Tài khoản dùng để viết các tool này không có quyền xem trang Job (`/openings` rỗng, `/opening/{id}` báo "You cannot view this opening"). Đường lùi về tab Chia sẻ và `/interviews` đã chạy với dữ liệu thật. Đường đi chính (`/openings`, `/opening/{id}`) viết theo mô tả của người dùng có quyền HR và chỉ test bằng dữ liệu giả (`node --test`). Chưa rõ `/opening/{id}` có phân trang hay không: tool đọc tiếp `?page=N` nếu Base báo `total_pages`, và ghi chú khi số ứng viên đọc được ít hơn `stats.total`.
+- ⚠️ **Phần đã kiểm chứng và phần chưa.** Tài khoản dùng để viết các tool này không có quyền xem trang Job (`/openings` rỗng, `/opening/{id}` báo "You cannot view this opening"). Đường lùi về tab Chia sẻ và `/interviews` đã chạy với dữ liệu thật. Đường đi chính (`/openings`, `/opening/{id}`) viết theo mô tả của người dùng có quyền HR, test bằng dữ liệu giả (`node --test`), và đã được một tài khoản HR chạy thật trên Windows ngày 25/11/2026 (số liệu khớp với Base). Chưa rõ `/opening/{id}` có phân trang hay không: tool đọc tiếp `?page=N` nếu Base báo `total_pages`, và ghi chú khi số ứng viên đọc được ít hơn `stats.total`.
 - Mọi request tới Base trong các tool hiring xếp hàng chạy lần lượt (cách nhau 200ms), vì Base rớt kết nối khi bị gọi song song và báo cáo tuần phải đọc mỗi job một trang.
 - Bảo mật: pageData của Base chứa nhiều thứ thừa (tài khoản người dùng kèm hash password, email / phone / CCCD / token của ứng viên). Mọi dữ liệu ra khỏi tool đều đi qua các hàm `normalize*` trong `hiring-data.js`, chỉ lấy đúng trường cần dùng. Thêm trường mới thì thêm ở đó, không trả object gốc.
 - Endpoint khác đã thử và bỏ: `api/evaluation/get` (code 0 / 998 = INVALID_DATA, chưa tìm ra tham số đúng), `/candidates`, `/candidates/search`, `/opening/<id>/candidates` (đều trả 0 ứng viên với account này).

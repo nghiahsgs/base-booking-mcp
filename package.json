@@ -1,6 +1,6 @@
 {
   "name": "base-vn-mcp",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "MCP server cho Base.vn: đặt phòng họp, đọc Base Hiring (ứng viên, job, pipeline, báo cáo tuần), đọc Base Timeoff",
   "private": true,
   "main": "server.js",

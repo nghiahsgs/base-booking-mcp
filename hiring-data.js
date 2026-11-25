@@ -315,7 +315,38 @@ function normalizeCandidate(c, stages, opening) {
     files: (c.uploaded_files || c.files || []).length,
     comments: num(c.stats && c.stats.comments),
     contact: { email: String(c.email || ""), phone: String(c.phone || "") },
+    // Khoá để nhận ra cùng một người nộp nhiều job (chỉ dùng nội bộ, không in ra)
+    personEmail: String(c.email || "").trim().toLowerCase(),
+    personName: noAccent(c.name || "").replace(/\s+/g, " "),
   };
+}
+
+// Gom các hồ sơ của cùng một người: trùng email, hoặc trùng tên (bỏ dấu) khi email không mâu thuẫn nhau.
+// Không gom theo số điện thoại: nhiều hồ sơ do cùng một người giới thiệu nhập có thể dùng chung số.
+// Trả hàm person(c) -> { key, name }: name là một cách viết duy nhất, ưu tiên bản có dấu.
+function groupPeople(candidates) {
+  const byEmail = new Map();
+  const byName = new Map();
+  const groups = [];
+  const hasAccent = (s) => noAccent(s) !== String(s).toLowerCase().trim();
+  for (const c of candidates) {
+    let g = c.personEmail ? byEmail.get(c.personEmail) : null;
+    if (!g && c.personName) {
+      const sameName = byName.get(c.personName);
+      if (sameName && (!c.personEmail || !sameName.email || sameName.email === c.personEmail)) g = sameName;
+    }
+    if (!g) groups.push((g = { key: "p" + groups.length, name: c.name, email: c.personEmail, ids: new Set() }));
+    else if ((hasAccent(c.name) && !hasAccent(g.name)) || (hasAccent(c.name) === hasAccent(g.name) && c.name.length > g.name.length)) g.name = c.name;
+    if (c.personEmail) {
+      byEmail.set(c.personEmail, g);
+      g.email = g.email || c.personEmail;
+    }
+    if (c.personName && !byName.has(c.personName)) byName.set(c.personName, g);
+    g.ids.add(c.id);
+  }
+  const byCandidate = new Map();
+  for (const g of groups) for (const id of g.ids) byCandidate.set(id, g);
+  return (c) => byCandidate.get(c.id) || { key: "c" + c.id, name: c.name };
 }
 
 function normalizeInterview(iv) {
@@ -488,7 +519,16 @@ function fetchInterviews() {
   return cached("interviews", async () => {
     const pd = pickPageData(await getHiring("/interviews"), "interviews");
     if (!pd) throw new Error("Không thấy `interviews` trong Client.pageData của /interviews — Base có thể đã đổi layout.");
-    return pd.interviews.map(normalizeInterview);
+    // Trang này liệt kê mọi buổi (cả đã qua) và phân trang bằng ?page=N. pageData không báo tổng số trang,
+    // nên đọc tiếp tới khi trang mới không thêm buổi nào.
+    const byId = new Map(pd.interviews.map((iv) => [String(iv.id), iv]));
+    for (let page = 2; page <= 40; page++) {
+      const more = pickPageData(await getHiring(`/interviews?page=${page}`), "interviews");
+      const fresh = more ? more.interviews.filter((iv) => !byId.has(String(iv.id))) : [];
+      if (!fresh.length) break;
+      for (const iv of fresh) byId.set(String(iv.id), iv);
+    }
+    return [...byId.values()].map(normalizeInterview);
   });
 }
 
@@ -550,6 +590,7 @@ module.exports = {
   normalizeMoves,
   normalizeCandidate,
   normalizeInterview,
+  groupPeople,
   dropCache,
   fetchShared,
   fetchOpenings,

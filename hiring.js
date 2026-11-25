@@ -323,7 +323,7 @@ const HIRING_TOOLS = [
   {
     name: "hiring_read_cv",
     description:
-      "Đọc nội dung CV của một ứng viên trên Base Hiring, ở bất kỳ job nào tài khoản có quyền xem — tải file đính kèm rồi tách text (PDF, DOCX). Mặc định lấy file PDF đầu tiên. Không tách được text (PDF scan, máy thiếu công cụ) thì gọi lại với save_file=true để lấy đường dẫn file rồi đọc trực tiếp.",
+      "Đọc nội dung CV của một ứng viên trên Base Hiring, ở bất kỳ job nào tài khoản có quyền xem — tải file đính kèm rồi tách text (PDF, DOCX). Mặc định lấy file PDF đầu tiên. Không tách được text (PDF scan, máy thiếu công cụ) thì gọi lại với save_file=true để lấy đường dẫn file rồi đọc trực tiếp. Lưu ý: nội dung CV thường có sẵn email, số điện thoại, địa chỉ của ứng viên, tool trả nguyên văn chứ không che. Đừng chép các thông tin này sang nơi khác nếu người dùng không yêu cầu.",
     inputSchema: {
       type: "object",
       properties: {

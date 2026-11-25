@@ -80,7 +80,15 @@ test("đường đi chính: 4 tool báo cáo + tìm ứng viên ngoài tab Chia 
 
   const weekly = await call("hiring_weekly_report");
   assert.match(weekly, /Phạm vi: 1 job đang mở/);
-  assert.match(weekly, /Nguyễn Văn Giả, job Backend Developer, vòng Apply: 20 ngày/);
+  assert.match(weekly, /- Backend Developer: 1 hồ sơ đọng\n  - Nguyễn Văn Giả, vòng Apply: 20 ngày/);
+  // loại job khỏi báo cáo
+  const none = await call("hiring_weekly_report", { exclude_openings: ["backend"] });
+  assert.match(none, /Phạm vi: 0 job đang mở/);
+  assert.match(none, /Đã loại khỏi báo cáo: Backend Developer\./);
+  // lịch phỏng vấn: khoảng ngày không có buổi nào thì vẫn nói rõ Base trả gì
+  const empty = await call("hiring_interview_schedule", { from: "2020-01-01", to: "2020-01-07" });
+  assert.match(empty, /0 buổi/);
+  assert.match(empty, /trang Lịch phỏng vấn của Base trả 1 buổi/);
 
   const sched = await call("hiring_interview_schedule");
   assert.match(sched, /1 buổi/);

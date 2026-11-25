@@ -36,7 +36,7 @@ function parseStaleDays(v) {
 
 // ---- chọn job + nạp dữ liệu ----
 
-async function selectOpenings({ opening, company, status }) {
+async function selectOpenings({ opening, company, status, exclude }) {
   const info = await D.fetchOpenings();
   let list = info.openings;
   if (opening) {
@@ -60,7 +60,29 @@ async function selectOpenings({ opening, company, status }) {
       );
     }
   }
-  return { source: info.source, requests: info.requests, openings: list };
+  // Job loại khỏi báo cáo: tham số `exclude` + danh sách cố định `hiring_report_exclude` trong config.json.
+  // Gọi đích danh một job bằng `opening` thì không loại.
+  const excluded = [];
+  if (!opening) {
+    const rules = excludeRules(exclude);
+    if (rules.length) {
+      list = list.filter((o) => {
+        const hit = rules.some((q) => D.matchOpening(o, q));
+        if (hit) excluded.push(o.name);
+        return !hit;
+      });
+    }
+  }
+  return { source: info.source, requests: info.requests, openings: list, excluded };
+}
+
+function excludeRules(exclude) {
+  const fromArg = Array.isArray(exclude) ? exclude : exclude ? String(exclude).split(/[;\n]/) : [];
+  let fromCfg = [];
+  try {
+    fromCfg = D.loadConfig().hiring_report_exclude || [];
+  } catch {}
+  return [...fromArg, ...(Array.isArray(fromCfg) ? fromCfg : [fromCfg])].map((s) => String(s).trim()).filter(Boolean);
 }
 
 // Đọc lần lượt từng job. Job nào lỗi thì ghi chú lại, không làm hỏng cả báo cáo.
@@ -117,9 +139,10 @@ async function toolListOpenings({ status, company } = {}) {
 
 // ---- 2. hiring_pipeline ----
 
-function buildPipeline(datas, { staleDays = 7, includeContact = false, now, source, errors = [] } = {}) {
+function buildPipeline(datas, { staleDays = 7, includeContact = false, now, source, errors = [], excluded = [] } = {}) {
   const out = [];
   if (source === "shared") out.push(`Lưu ý: ${SHARED_NOTE}`, "");
+  if (excluded.length) out.push(`Đã loại khỏi kết quả: ${excluded.join("; ")}.`, "");
   let staleTotal = 0;
   let shown = 0;
   for (const d of datas) {
@@ -167,10 +190,10 @@ function buildPipeline(datas, { staleDays = 7, includeContact = false, now, sour
   return out.join("\n");
 }
 
-async function toolPipeline({ opening, company, stale_days, include_contact } = {}) {
+async function toolPipeline({ opening, company, stale_days, include_contact, exclude_openings } = {}) {
   const staleDays = parseStaleDays(stale_days);
   // Lọc theo công ty thì lấy cả job đã đóng, để bắt job đóng mà còn ứng viên treo.
-  const sel = await selectOpenings({ opening, company, status: company ? "all" : "open" });
+  const sel = await selectOpenings({ opening, company, status: company ? "all" : "open", exclude: exclude_openings });
   // Job đã đóng mà stats báo không còn ai đang xử lý -> khỏi tải trang job.
   const todo = sel.openings.filter(
     (o) => opening || !o.closed || !o.stats || o.stats.active + o.stats.offered > 0
@@ -182,6 +205,7 @@ async function toolPipeline({ opening, company, stale_days, include_contact } = 
     now: D.nowUnix(),
     source: sel.source,
     errors,
+    excluded: sel.excluded,
   });
 }
 
@@ -227,6 +251,19 @@ function collectInterviews(pageInterviews, datas, { from, to, openingIds } = {})
   return [...map.values()].sort((a, b) => a.time - b.time);
 }
 
+// Cho người đọc biết tool đã đọc được lịch thật từ Base hay chưa, khi kết quả trong khoảng ngày là 0.
+function interviewCoverage(pageInterviews, datas) {
+  const times = (pageInterviews || []).map((iv) => iv.time).filter((t) => t > 0);
+  let onCandidates = 0;
+  for (const d of datas) for (const c of d.candidates) if (c.interview) onCandidates++;
+  const span = times.length ? `, từ ${fmtDate(Math.min(...times))} đến ${fmtDate(Math.max(...times))}` : "";
+  return (
+    `Nguồn dữ liệu: trang Lịch phỏng vấn của Base trả ${times.length} buổi mà tài khoản này thấy được${span}. ` +
+    `${onCandidates} ứng viên trong các job đang xét có gắn lịch phỏng vấn. ` +
+    `Con số "phỏng vấn" trong hiring_list_openings là tổng số buổi từ trước đến nay của job, không phải của riêng khoảng ngày này.`
+  );
+}
+
 function interviewLine(iv) {
   const meta = [iv.type, iv.duration ? `${iv.duration} phút` : ""].filter(Boolean).join(", ");
   const loc = iv.location.length > 80 ? iv.location.slice(0, 77) + "..." : iv.location;
@@ -240,37 +277,55 @@ function interviewLine(iv) {
 
 // ---- 3. hiring_weekly_report ----
 
-function weekEvents(d, { from, to }) {
+// `person(c)` trả { key, name }: cùng một người ở nhiều job có chung key và chung một cách viết tên.
+function weekEvents(d, { from, to }, person = (c) => ({ key: c.id, name: c.name })) {
   const inRange = (t) => t >= from && t < to;
-  const ev = { fresh: [], moved: [], offered: [], hired: [], rejected: [] };
+  const ev = { fresh: [], freshKeys: [], moved: [], offered: [], hired: [], rejected: [] };
   for (const c of d.candidates) {
-    if (inRange(c.applied)) ev.fresh.push(c.name);
+    const { key, name } = person(c);
+    if (inRange(c.applied)) {
+      ev.fresh.push(name);
+      ev.freshKeys.push(key);
+    }
     for (const m of c.moves) {
       if (m.init || !inRange(m.time)) continue;
       const b = bucket(m.toState);
-      if (b === "offered") ev.offered.push(c.name);
-      else if (b === "hired") ev.hired.push(c.name);
-      else if (b === "rejected") ev.rejected.push(`${c.name} (từ vòng ${m.from || "?"})`);
-      else ev.moved.push(`${c.name}: ${m.from || "?"} sang ${m.to}`);
+      if (b === "offered") ev.offered.push(name);
+      else if (b === "hired") ev.hired.push(name);
+      else if (b === "rejected") ev.rejected.push(`${name} (từ vòng ${m.from || "?"})`);
+      else ev.moved.push(`${name}: ${m.from || "?"} sang ${m.to}`);
     }
   }
   return ev;
 }
 
 // Markdown, không dùng bảng (bảng vỡ khi dán vào Outlook / Teams).
-function buildWeeklyReport(datas, interviews, { range, staleDays = 7, now, company, source, errors = [], interviewNote } = {}) {
+function buildWeeklyReport(
+  datas,
+  interviews,
+  { range, staleDays = 7, stalePerJob = 5, now, company, source, errors = [], interviewNote, excluded = [] } = {}
+) {
   const last = range.to - DAY;
   const out = [`# Báo cáo tuyển dụng tuần ${fmtDate(range.from)} đến ${fmtDate(last)}`, ""];
   out.push(`Phạm vi: ${datas.length} job đang mở` + (company ? `, công ty khớp "${company}"` : "") + ".");
   if (source === "shared") out.push(`Lưu ý: ${SHARED_NOTE}`);
+  if (excluded.length) out.push(`Đã loại khỏi báo cáo: ${excluded.join("; ")}.`);
   out.push("");
 
-  const per = datas.map((d) => ({ d, ev: weekEvents(d, range) }));
+  const person = D.groupPeople(datas.flatMap((d) => d.candidates));
+  const per = datas.map((d) => ({ d, ev: weekEvents(d, range, person) }));
   const sum = (k) => per.reduce((a, x) => a + x.ev[k].length, 0);
   const live = datas.reduce((a, d) => a + d.candidates.filter(inProgress).length, 0);
+  // Một người nộp nhiều job = nhiều hồ sơ nhưng chỉ tính là một người.
+  const freshKeys = per.flatMap((x) => x.ev.freshKeys);
+  const freshPeople = new Set(freshKeys).size;
+  const freshLine =
+    freshPeople === freshKeys.length
+      ? `- Hồ sơ mới: ${freshKeys.length}`
+      : `- Hồ sơ mới: ${freshKeys.length} hồ sơ của ${freshPeople} người (${freshKeys.length - freshPeople} hồ sơ là của người đã nộp job khác trong tuần)`;
   out.push(
     "## Tổng quan",
-    `- Hồ sơ mới: ${sum("fresh")}`,
+    freshLine,
     `- Chuyển vòng: ${sum("moved")}`,
     `- Offer: ${sum("offered")}`,
     `- Tuyển được: ${sum("hired")}`,
@@ -300,18 +355,22 @@ function buildWeeklyReport(datas, interviews, { range, staleDays = 7, now, compa
   if (interviewNote) out.push(`- Lưu ý: ${interviewNote}`);
   out.push("");
 
-  const stale = [];
-  for (const d of datas) for (const c of d.candidates) if (isStale(c, now, staleDays)) stale.push({ c, o: d.opening });
-  stale.sort((a, b) => a.c.lastUpdate - b.c.lastUpdate);
+  // Hồ sơ đọng gom theo job, mỗi job chỉ liệt kê `stalePerJob` hồ sơ đọng lâu nhất, phần còn lại gom 1 dòng.
+  // Tránh để một job kiểu "kho hồ sơ chung" lấn hết danh sách.
   out.push(`## Hồ sơ đọng cần xử lý (không cập nhật quá ${staleDays} ngày)`);
-  if (stale.length)
-    out.push(
-      ...stale.map(
-        ({ c, o }) =>
-          `- ${c.name}, job ${o.name}, vòng ${c.stageName}: ${staleDaysOf(c, now)} ngày, cập nhật cuối ${fmtDate(c.lastUpdate)}`
-      )
-    );
-  else out.push("- Không có.");
+  let staleTotal = 0;
+  for (const d of datas) {
+    const list = d.candidates.filter((c) => isStale(c, now, staleDays)).sort((a, b) => a.lastUpdate - b.lastUpdate);
+    if (!list.length) continue;
+    staleTotal += list.length;
+    const shown = stalePerJob > 0 ? list.slice(0, stalePerJob) : list;
+    out.push(`- ${d.opening.name}: ${list.length} hồ sơ đọng`);
+    for (const c of shown)
+      out.push(`  - ${person(c).name}, vòng ${c.stageName}: ${staleDaysOf(c, now)} ngày, cập nhật cuối ${fmtDate(c.lastUpdate)}`);
+    if (list.length > shown.length)
+      out.push(`  - Còn ${list.length - shown.length} hồ sơ khác. Xem đủ bằng hiring_pipeline với opening="${d.opening.code || d.opening.id}".`);
+  }
+  if (!staleTotal) out.push("- Không có.");
 
   if (errors.length) out.push("", "## Job không đọc được", ...errors.map((e) => `- ${e}`));
   return out.join("\n");
@@ -325,11 +384,12 @@ async function loadInterviewsSafe() {
   }
 }
 
-async function toolWeeklyReport({ company, week_of, stale_days } = {}) {
+async function toolWeeklyReport({ company, week_of, stale_days, stale_per_job, exclude_openings } = {}) {
   const staleDays = parseStaleDays(stale_days);
+  const stalePerJob = stale_per_job === undefined || stale_per_job === null || stale_per_job === "" ? 5 : Math.max(0, Number(stale_per_job) || 0);
   const now = D.nowUnix();
   const range = D.weekRange(week_of ? D.parseDate(week_of) : now);
-  const sel = await selectOpenings({ company, status: "open" });
+  const sel = await selectOpenings({ company, status: "open", exclude: exclude_openings });
   const { datas, errors } = await loadOpenings(sel.openings);
   const iv = await loadInterviewsSafe();
   const interviews = collectInterviews(iv.list, datas, {
@@ -340,11 +400,13 @@ async function toolWeeklyReport({ company, week_of, stale_days } = {}) {
   return buildWeeklyReport(datas, interviews, {
     range,
     staleDays,
+    stalePerJob,
     now,
     company,
     source: sel.source,
     errors,
-    interviewNote: iv.note,
+    interviewNote: [iv.note, interviews.length ? "" : interviewCoverage(iv.list, datas)].filter(Boolean).join(" "),
+    excluded: sel.excluded,
   });
 }
 
@@ -375,12 +437,21 @@ async function toolInterviewSchedule({ from, to, company, opening } = {}) {
     // không lọc job/công ty -> giữ mọi buổi trên trang lịch, kể cả của job đã đóng
     openingIds: filtered ? new Set(sel.openings.map((o) => o.id)) : null,
   });
-  return buildSchedule(interviews, { from: start, to: end, source: sel.source, note: iv.note, errors });
+  return buildSchedule(interviews, {
+    from: start,
+    to: end,
+    source: sel.source,
+    note: [iv.note, interviewCoverage(iv.list, datas)].filter(Boolean).join(" "),
+    errors,
+  });
 }
 
 // ---- khai báo tool ----
 
 const COMPANY_DESC = "Lọc theo công ty khách hàng của job, vd 'Caspeco'. Không phân biệt hoa thường, dấu.";
+
+const EXCLUDE_DESC =
+  "Các job loại khỏi kết quả, mỗi phần tử là id, mã job, hoặc một phần tên. Vd ['Career at Scandinavian Software Park'] để bỏ job kho hồ sơ chung. Muốn loại cố định thì thêm mảng `hiring_report_exclude` vào config.json.";
 
 const HIRING_REPORT_TOOLS = [
   {
@@ -411,6 +482,7 @@ const HIRING_REPORT_TOOLS = [
         opening: { type: "string", description: "Job cần xem: id, mã job, hoặc một phần tên" },
         company: { type: "string", description: COMPANY_DESC + " Gộp cả job đã đóng còn ứng viên treo." },
         stale_days: { type: "number", description: "Số ngày không cập nhật thì coi là đọng. Mặc định 7." },
+        exclude_openings: { type: "array", items: { type: "string" }, description: EXCLUDE_DESC },
         include_contact: {
           type: "boolean",
           description: "true = trả thêm email và số điện thoại. Chỉ bật khi người dùng hỏi thông tin liên hệ.",
@@ -433,6 +505,11 @@ const HIRING_REPORT_TOOLS = [
           description: "Một ngày bất kỳ trong tuần cần báo cáo, DD/MM/YYYY hoặc YYYY-MM-DD. Mặc định tuần hiện tại.",
         },
         stale_days: { type: "number", description: "Số ngày không cập nhật thì coi là đọng. Mặc định 7." },
+        stale_per_job: {
+          type: "number",
+          description: "Mỗi job liệt kê tối đa bao nhiêu hồ sơ đọng (đọng lâu nhất trước), phần còn lại gom 1 dòng tổng. Mặc định 5. 0 = liệt kê hết.",
+        },
+        exclude_openings: { type: "array", items: { type: "string" }, description: EXCLUDE_DESC },
       },
       required: [],
     },
@@ -465,5 +542,6 @@ module.exports = {
   buildWeeklyReport,
   buildSchedule,
   collectInterviews,
+  interviewCoverage,
   weekEvents,
 };
