@@ -2,8 +2,8 @@
 // Ghi cookie Base vào config.json rồi gọi thử Base để kiểm tra cookie còn sống.
 // Cách dùng:
 //   1. Copy giá trị header `cookie` trong DevTools (Network > request tới booking.base.vn).
-//   2. node set-cookie.js            (macOS: đọc từ clipboard)
-//      hoặc: pbpaste | node set-cookie.js -    (đọc từ stdin, dùng được trên mọi hệ điều hành)
+//   2. node set-cookie.js            (tự đọc clipboard: macOS pbpaste, Windows PowerShell Get-Clipboard, Linux wl-paste / xclip / xsel)
+//      hoặc: <lệnh dán clipboard> | node set-cookie.js -    (đọc từ stdin)
 // Script không in cookie ra màn hình.
 
 const fs = require("fs");
@@ -22,8 +22,25 @@ function fail(msg) {
 
 function readInput() {
   if (process.argv[2] === "-" || !process.stdin.isTTY) return fs.readFileSync(0, "utf8");
-  if (process.platform === "darwin") return execFileSync("pbpaste", { encoding: "utf8" });
-  fail("Hệ điều hành này không có pbpaste. Hãy đưa cookie qua stdin: <lệnh dán clipboard> | node set-cookie.js -");
+  // Thử lần lượt các lệnh đọc clipboard của từng hệ điều hành.
+  const readers = {
+    darwin: [["pbpaste", []]],
+    win32: [
+      ["powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "[Console]::OutputEncoding=[Text.Encoding]::UTF8; Get-Clipboard -Raw"]],
+      ["pwsh", ["-NoProfile", "-NonInteractive", "-Command", "Get-Clipboard -Raw"]],
+    ],
+    linux: [
+      ["wl-paste", ["--no-newline"]],
+      ["xclip", ["-selection", "clipboard", "-o"]],
+      ["xsel", ["--clipboard", "--output"]],
+    ],
+  }[process.platform] || [];
+  for (const [bin, args] of readers) {
+    try {
+      return execFileSync(bin, args, { encoding: "utf8", windowsHide: true, stdio: ["ignore", "pipe", "ignore"] });
+    } catch {}
+  }
+  fail("Không đọc được clipboard trên máy này. Hãy đưa cookie qua stdin: <lệnh dán clipboard> | node set-cookie.js -");
 }
 
 function mergeSetCookie(cookie, setCookies) {

@@ -3,7 +3,7 @@
 MCP server nói chuyện với Base (base.vn), đăng ký global (user scope) cho Claude Code và OpenCode. Ba mảng:
 
 - **Booking** — đặt phòng họp trên https://booking.base.vn (Base Wework).
-- **Hiring** — đọc ứng viên / CV / bình luận trên https://hiring.base.vn (chỉ đọc, không ghi).
+- **Hiring** — đọc job, pipeline, báo cáo tuần, lịch phỏng vấn, ứng viên / CV / bình luận trên https://hiring.base.vn (chỉ đọc, không ghi).
 - **Timeoff** — đọc quỹ phép và đề xuất nghỉ trên https://timeoff.base.vn (chỉ đọc, không ghi).
 
 Dùng chung 1 cookie: Base set cookie ở domain `.base.vn` nên `basessid` dùng được cho cả 2 app.
@@ -17,14 +17,27 @@ Dùng chung 1 cookie: Base set cookie ở domain `.base.vn` nên `basessid` dùn
 
 ## Tools — hiring (chỉ đọc)
 
-- `hiring_list_candidates` — danh sách ứng viên được chia sẻ với tài khoản này (tab CHIA SẺ): tên, id, tin tuyển dụng, vòng hiện tại, nguồn, số file, số bình luận. Lọc theo `opening` / `stage` / `query`.
-- `hiring_get_candidate` — hồ sơ 1 ứng viên: liên hệ, vòng, nguồn, file đính kèm (kèm index), lịch sử chuyển vòng.
-- `hiring_read_cv` — tải file đính kèm rồi tách text (PDF qua `pdftotext`, doc/docx/rtf qua `textutil`). Mặc định lấy PDF đầu tiên, chọn file khác bằng `file_index`.
+Báo cáo tuyển dụng:
+
+- `hiring_list_openings` — danh sách job: tên, mã job, công ty, trạng thái, deadline, tổng ứng viên, số đang xử lý / offer / đã tuyển / bị loại, số ứng viên ở từng vòng. Lọc `status` (`open` mặc định = mọi job chưa Closed, `public`, `internal`, `closed`, `all`) và `company`.
+- `hiring_pipeline` — pipeline của một job (`opening`: id, mã job, hoặc một phần tên) hoặc gộp mọi job của một công ty (`company`). Liệt kê ứng viên đang xử lý (không gồm Rejected) nhóm theo vòng, mỗi người có tên, vị trí hiện tại, nguồn, ngày nộp, ngày cập nhật cuối. Đánh dấu hồ sơ **đọng** (không cập nhật quá `stale_days`, mặc định 7) và job đã đóng nhưng còn ứng viên chưa chuyển sang Rejected.
+- `hiring_weekly_report` — báo cáo tuần (thứ Hai đến Chủ nhật, giờ VN) cho mọi job đang mở hoặc một `company`: hồ sơ mới, chuyển vòng, offer, tuyển được, bị loại, lịch phỏng vấn trong tuần, hồ sơ đọng. Trả markdown không có bảng để dán thẳng vào email hoặc Teams. `week_of` chọn tuần khác.
+- `hiring_interview_schedule` — lịch phỏng vấn theo khoảng ngày (`from`, `to`, mặc định 7 ngày từ hôm nay): ứng viên, job, vòng hiện tại, giờ, hình thức, người phỏng vấn, địa điểm.
+
+Ứng viên:
+
+- `hiring_list_candidates` — danh sách ứng viên được chia sẻ với tài khoản này (tab CHIA SẺ, đọc đủ mọi trang): tên, id, tin tuyển dụng, vòng hiện tại, nguồn, số file, số bình luận. Lọc theo `opening` / `stage` / `query`.
+- `hiring_get_candidate` — hồ sơ 1 ứng viên: vòng, nguồn, file đính kèm (kèm index), lịch sử chuyển vòng.
+- `hiring_read_cv` — tải file đính kèm rồi tách text (PDF, DOCX). Mặc định lấy PDF đầu tiên, chọn file khác bằng `file_index`. `save_file=true` lưu file ra thư mục tạm và trả đường dẫn để Claude đọc trực tiếp (dùng cho PDF scan hoặc máy không tách được text).
 - `hiring_get_comments` — bình luận nội bộ về ứng viên (ai viết, lúc nào, nội dung).
 
-Tham số `candidate` nhận id (vd `123456`) hoặc tên (không cần dấu, vd `nguyen van a`).
+Tham số `candidate` nhận id (vd `123456`) hoặc tên (không cần dấu, vd `nguyen van a`). Ba tool `hiring_get_candidate`, `hiring_read_cv`, `hiring_get_comments` tìm ứng viên ở mọi job tài khoản xem được: tab Chia sẻ trước, rồi các job đang mở, rồi các job đã đóng. Thêm `opening` để giới hạn một job.
 
-⚠️ **Phạm vi = ứng viên được share với account này**. Tab TẤT CẢ trả về rỗng vì account không có quyền xem toàn bộ, không phải lỗi tool.
+Ví dụ câu hỏi: "Đang có mấy job mở, mỗi job bao nhiêu ứng viên?", "Pipeline của công ty X thế nào, hồ sơ nào bị đọng?", "Tuần này có những buổi phỏng vấn nào?", "Làm báo cáo tuyển dụng tuần này để gửi sếp."
+
+⚠️ **Thông tin liên hệ ẩn theo mặc định.** Email và số điện thoại của ứng viên chỉ trả về khi gọi với `include_contact=true` (`hiring_list_candidates`, `hiring_get_candidate`, `hiring_pipeline`). CCCD, token và các trường khác của Base không bao giờ trả về. Thay đổi so với bản 1.0: trước đây `hiring_list_candidates` và `hiring_get_candidate` luôn in email và số điện thoại.
+
+⚠️ **Phạm vi phụ thuộc quyền của tài khoản.** Tài khoản HR hoặc người phụ trách job thấy được trang Job (`/openings`, `/opening/{id}`) thì các tool đọc toàn bộ. Tài khoản chỉ được share ứng viên (trang Job rỗng) thì các tool tự lùi về tab Chia sẻ: vẫn có danh sách job và số đếm theo vòng của cả job, nhưng pipeline, báo cáo tuần và lịch phỏng vấn chỉ tính trên các ứng viên được chia sẻ. Kết quả luôn ghi rõ khi đang ở chế độ này.
 
 ⚠️ **Đánh giá (evaluation) chưa đọc được:** `api/evaluation/get` trả `code:0 message:998`. **998 = `INVALID_DATA`** trong bảng `AP.error.code` của Base (997 CONFLICT_DATA, 999 INCOMPLETE_DATA, 1001 INVALID_USER, 1002 INVALID_AUTHENTICATION), tức là **sai tham số phía mình, không phải thiếu quyền** — đừng lặp lại kết luận sai này. Đã thử 9 tên tham số (candidate_id, hid, contact_id, application_id…), urlencoded + multipart + GET, đều 998; GET thì trả `BAD_XCODE` nên `__code` chỉ nhận qua POST. Endpoint có thật (không 404). Chưa làm tool cho phần này.
 
@@ -44,7 +57,7 @@ Tool sẽ báo lỗi "Cookie Base có vẻ đã hết hạn". Cách thay:
 
 1. Mở https://booking.base.vn/home trong Chrome (đang đăng nhập).
 2. DevTools > Network > chọn request bất kỳ tới booking.base.vn > Request Headers > copy toàn bộ giá trị header `cookie`.
-3. Chạy `node set-cookie.js`. Script đọc cookie từ clipboard (macOS), gọi thử Base, cookie sống thì mới ghi vào `config.json`. Hệ điều hành khác: dán qua stdin, vd `xclip -o -selection clipboard | node set-cookie.js -`.
+3. Chạy `node set-cookie.js`. Script tự đọc cookie từ clipboard (macOS `pbpaste`, Windows PowerShell `Get-Clipboard`, Linux `wl-paste` / `xclip` / `xsel`), gọi thử Base, cookie sống thì mới ghi vào `config.json`. Không đọc được clipboard thì dán qua stdin, vd `xclip -o -selection clipboard | node set-cookie.js -`.
 4. Restart Claude Code (hoặc `/mcp` > reconnect).
 
 Script không in cookie ra màn hình. Muốn làm tay thì dán cookie vào trường `"cookie"` trong `config.json`.
@@ -66,15 +79,23 @@ Bên hiring lỗi hiện rõ hơn: cookie chết thì hiring.base.vn redirect sa
 
 ## Kỹ thuật — hiring (reverse-engineered 16/09/2026)
 
-Code ở `hiring.js`, `server.js` chỉ nối `...HIRING_TOOLS` vào mảng `TOOLS`.
+Code chia 4 file: `hiring-data.js` (gọi trang, đọc `Client.pageData`, chuẩn hoá dữ liệu, cache), `hiring-reports.js` (4 tool báo cáo), `hiring.js` (4 tool ứng viên), `cv-text.js` (tách text CV). `server.js` chỉ nối `...HIRING_TOOLS` vào mảng `TOOLS`.
 
 - Nguồn dữ liệu chính: `GET /candidates/shared` — HTML nhúng `Client.pageData={...}` chứa `candidates[]` (66 field/ứng viên: liên hệ, `opening_export`, `stage_id`, `uploaded_files`, `changelogs`, `stats`), `stages_maps` (map `opening_id` -> danh sách vòng, để dịch `stage_id` -> tên vòng, vd "Rejected"), `total`.
 - Parse: quét ngoặc cân bằng từ `Client.pageData=`. Có 2 lần gán trong trang, lần đầu là `{}` — lấy lần nào parse ra có `candidates`.
 - Trang này nặng ~280KB và mọi tool đều cần -> cache 60s trong process + gộp request song song. Không cache thì gọi 4 tool cùng lúc là Base rớt kết nối (`fetch failed`). `getHiring` cũng retry 3 lần.
-- CV: `uploaded_files[].full_url` (data-gcdn.basecdn.net) tải được bằng chính cookie đó. Tách text bằng `pdftotext -layout` (thử `/opt/homebrew/bin`, `/usr/local/bin`, rồi PATH — MCP process không chắc có homebrew trong PATH). Thiếu `pdftotext` thì tool trả `download_url` thay vì throw. Cài: `brew install poppler`.
+- CV: `uploaded_files[].full_url` (data-gcdn.basecdn.net) tải được bằng chính cookie đó. Cookie chỉ được gửi tới host `*.base.vn` và `*.basecdn.net`. Tách text (`cv-text.js`): PDF thử `pdftotext -layout` trước (thử `/opt/homebrew/bin`, `/usr/local/bin`, rồi PATH — MCP process không chắc có homebrew trong PATH), không có thì dùng thư viện JS `pdf-parse` (tuỳ chọn, cài bằng `npm install`, chạy được trên Windows). DOCX tự đọc zip bằng `zlib` của Node, không cần cài gì. DOC / RTF chỉ tách được trên macOS (`textutil`). Không tách được thì tool hướng dẫn gọi lại với `save_file=true`.
 - Bình luận: POST urlencoded `/ajax/api/comment/load` với `hid` + `token` của ứng viên (có sẵn trong candidate object) + bộ CSRF `__code`/`__otp`/`__sessionid`. Trả `{code:1, origin:<candidate>, comments:[...]}`. Content là HTML -> phải decode entity (`&gt;`, `&#9794` không có dấu `;`) và strip tag.
 - `stats.comments` trên candidate có thể lớn hơn số comment API trả (vd counter 2, đọc được 1). Không phải phân trang — thử `method=older/all` đều trả `code:0`, comment không có reply. Nhiều khả năng counter tính cả comment đã xoá. Tool nói rõ chỗ chênh thay vì giấu.
 - Cookie chết: `GET` bất kỳ trên hiring.base.vn redirect (`res.url`) sang `account.base.vn/a/login?app=hiring&return=...`, trang có `<title>Đăng nhập - Base Account</title>`.
+- Trang Job (thêm 25/11/2026): `GET /openings` có `pageData.openings[]` (`id`, `name`, `codename`, `status`: 10 Public, 7 Internal, -1 Closed, `deadline`, `group_export.name` = công ty, `stats`) và `opening_requests[]`. `GET /opening/{id}` có `pageData.candidates[]` và `pageData.stages[]`. `GET /interviews` có `pageData.interviews[]` (giờ, hình thức, `followers` = người phỏng vấn, `opening_id`, `candidate_id`).
+- Khối `Client.pageData` đầu tiên của các trang này là `{}`. Phải chọn khối có đúng mảng cần đọc (`pickPageData(html, "openings")`), không lấy khối đầu.
+- Tab Chia sẻ phân trang 20 người / trang, đọc tiếp bằng `?page=N` (`total_pages` trong pageData). `?p=`, `?per_page=` không có tác dụng.
+- Phân loại ứng viên theo `state` của vòng (`active`, `offered`, `hired`, `failed`), không theo tên vòng vì mỗi job đặt tên một kiểu. Số đếm theo vòng nằm ở `stats` (trang Job) hoặc `xstats` (tab Chia sẻ), cùng một dạng: `{total, stages:[{id,name,total,state}], interviews:{total}}`.
+- Sự kiện trong tuần lấy từ `changelogs[]` của ứng viên: bản ghi có `data.stage_in` là một lần vào vòng, có thêm `data.stage_out` là chuyển vòng, `data.stage_in_state` cho biết offer / hired / failed.
+- ⚠️ **Phần đã kiểm chứng và phần chưa.** Tài khoản dùng để viết các tool này không có quyền xem trang Job (`/openings` rỗng, `/opening/{id}` báo "You cannot view this opening"). Đường lùi về tab Chia sẻ và `/interviews` đã chạy với dữ liệu thật. Đường đi chính (`/openings`, `/opening/{id}`) viết theo mô tả của người dùng có quyền HR và chỉ test bằng dữ liệu giả (`node --test`). Chưa rõ `/opening/{id}` có phân trang hay không: tool đọc tiếp `?page=N` nếu Base báo `total_pages`, và ghi chú khi số ứng viên đọc được ít hơn `stats.total`.
+- Mọi request tới Base trong các tool hiring xếp hàng chạy lần lượt (cách nhau 200ms), vì Base rớt kết nối khi bị gọi song song và báo cáo tuần phải đọc mỗi job một trang.
+- Bảo mật: pageData của Base chứa nhiều thứ thừa (tài khoản người dùng kèm hash password, email / phone / CCCD / token của ứng viên). Mọi dữ liệu ra khỏi tool đều đi qua các hàm `normalize*` trong `hiring-data.js`, chỉ lấy đúng trường cần dùng. Thêm trường mới thì thêm ở đó, không trả object gốc.
 - Endpoint khác đã thử và bỏ: `api/evaluation/get` (code 0 / 998 = INVALID_DATA, chưa tìm ra tham số đúng), `/candidates`, `/candidates/search`, `/opening/<id>/candidates` (đều trả 0 ứng viên với account này).
 
 ## Kỹ thuật — timeoff (reverse-engineered 12/10/2026)
@@ -87,7 +108,7 @@ Code ở `hiring.js`, `server.js` chỉ nối `...HIRING_TOOLS` vào mảng `TOO
 
 ## Cài đặt
 
-Cần Node 18+ (dùng `fetch` có sẵn, không có dependency). `hiring_read_cv` cần thêm `pdftotext` (`brew install poppler`).
+Cần Node 18+ (dùng `fetch` có sẵn). Server chạy được ngay, không bắt buộc cài gì thêm. Để `hiring_read_cv` đọc được PDF: chạy `npm install` (cài `pdf-parse`, dùng được trên Windows, Linux, macOS) hoặc cài poppler (macOS: `brew install poppler`). Chạy test: `npm test`.
 
 1. `git clone` repo này.
 2. Đăng nhập https://booking.base.vn/home, copy giá trị header `cookie` trong DevTools (xem mục "Khi cookie hết hạn"), rồi chạy `node set-cookie.js`. Script tự tạo `config.json`.

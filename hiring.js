@@ -1,280 +1,179 @@
-// Base Hiring (hiring.base.vn) — đọc ứng viên, CV, bình luận.
+// Base Hiring (hiring.base.vn) — tool về ứng viên: danh sách chia sẻ, hồ sơ, CV, bình luận. CHỈ ĐỌC.
 // Dùng chung cookie với booking.base.vn (cookie set ở domain .base.vn).
-// Cookie hết hạn -> hiring.base.vn redirect sang account.base.vn/a/login.
+// Tầng dữ liệu: hiring-data.js. Tool báo cáo (job, pipeline, báo cáo tuần, lịch phỏng vấn): hiring-reports.js.
 
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { execFileSync } = require("child_process");
+const D = require("./hiring-data.js");
+const { noAccent, fmtTime, decodeHtml } = D;
+const { extractText } = require("./cv-text.js");
+const { HIRING_REPORT_TOOLS } = require("./hiring-reports.js");
 
-const CONFIG_PATH = path.join(__dirname, "config.json");
-const UA =
-  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36";
+const CONTACT_HINT = "ẩn (gọi lại với include_contact=true nếu người dùng hỏi thông tin liên hệ)";
 
-function loadConfig() {
-  return JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"));
+function contactLine(c, include) {
+  if (!include) return `Liên hệ: ${CONTACT_HINT}`;
+  return `Email: ${c.contact.email || "không có"} · Điện thoại: ${c.contact.phone || "không có"}`;
 }
 
-function hiringUrl() {
-  return loadConfig().hiring_url || "https://hiring.base.vn";
-}
+// ---- tìm ứng viên ở mọi nơi tài khoản có quyền xem ----
 
-function basessid() {
-  const m = loadConfig().cookie.match(/basessid=([a-z0-9]+)/);
-  return m ? m[1] : "";
-}
-
-const COOKIE_DEAD =
-  'Cookie Base đã hết hạn (hiring.base.vn đẩy về trang login của account.base.vn). ' +
-  'Lấy cookie mới: DevTools > Network > request bất kỳ tới base.vn > Request Headers > cookie, ' +
-  "rồi dán vào trường \"cookie\" trong " + CONFIG_PATH + " và restart Claude Code.";
-
-// ---- lấy trang + parse Client.pageData ----
-
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-async function getHiring(urlPath) {
-  const cfg = loadConfig();
-  let res, lastErr;
-  // Base hay rớt kết nối khi nhiều request song song -> thử lại 2 lần
-  for (let attempt = 0; attempt < 3; attempt++) {
-    try {
-      res = await fetch(hiringUrl() + urlPath, {
-        headers: { cookie: cfg.cookie, "user-agent": UA },
-        redirect: "follow",
-      });
-      lastErr = null;
-      break;
-    } catch (e) {
-      lastErr = e;
-      await sleep(400 * (attempt + 1));
-    }
-  }
-  if (lastErr)
-    throw new Error(
-      `Không gọi được hiring.base.vn (${lastErr.message}) sau 3 lần thử. Mạng bình thường mà vẫn lỗi thì kiểm tra cookie trong ${CONFIG_PATH}.`
-    );
-  const html = await res.text();
-  if (res.url.includes("account.base.vn") || html.includes("<title>Đăng nhập - Base Account</title>")) {
-    throw new Error(COOKIE_DEAD);
-  }
-  return html;
-}
-
-// Client.pageData={...} — quét ngoặc cân bằng, bỏ qua chuỗi
-function extractPageData(html) {
-  const re = /Client\.pageData\s*=\s*\{/g;
-  let m;
-  let best = null;
-  while ((m = re.exec(html))) {
-    const start = m.index + m[0].length - 1;
-    let depth = 0,
-      i = start,
-      inStr = false,
-      esc = false;
-    for (; i < html.length; i++) {
-      const c = html[i];
-      if (inStr) {
-        if (esc) esc = false;
-        else if (c === "\\") esc = true;
-        else if (c === '"') inStr = false;
-        continue;
-      }
-      if (c === '"') inStr = true;
-      else if (c === "{") depth++;
-      else if (c === "}") {
-        depth--;
-        if (depth === 0) break;
-      }
-    }
-    let obj;
-    try {
-      obj = JSON.parse(html.slice(start, i + 1));
-    } catch {
-      continue;
-    }
-    if (Array.isArray(obj.candidates)) return obj;
-    if (!best) best = obj;
-  }
-  if (best) return best;
-  throw new Error("Không đọc được Client.pageData từ trang hiring — Base có thể đã đổi layout.");
-}
-
-function extractToken(html, key) {
-  const m = html.match(new RegExp(`"${key}":"([a-f0-9]{32})"`));
-  return m ? m[1] : null;
-}
-
-// ---- tiện ích ----
-
-function noAccent(s) {
-  return String(s)
-    .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
-    .replace(/đ/g, "d")
-    .replace(/Đ/g, "D")
-    .toLowerCase()
-    .trim();
-}
-
-function fmtTime(unix) {
-  if (!unix || Number(unix) <= 0) return "";
-  const d = new Date((Number(unix) + 7 * 3600) * 1000);
-  const p = (n) => String(n).padStart(2, "0");
-  return `${p(d.getUTCDate())}/${p(d.getUTCMonth() + 1)}/${d.getUTCFullYear()} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
-}
-
-function decodeHtml(s) {
-  return String(s || "")
-    .replace(/<br\s*\/?>/gi, "\n")
-    .replace(/<\/p>/gi, "\n")
-    .replace(/<[^>]+>/g, "")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#0?39;/g, "'")
-    .replace(/&middot;/g, "·")
-    .replace(/&#(\d+);?/g, (_, n) => String.fromCharCode(Number(n)))
-    .trim();
-}
-
-function stageName(pd, c) {
-  const maps = pd.stages_maps || {};
-  const list = maps[String(c.opening_id)] || [];
-  const st = list.find((s) => String(s.id) === String(c.stage_id));
-  if (st) return st.name;
-  const logs = c.changelogs || [];
-  for (let i = logs.length - 1; i >= 0; i--) {
-    const n = logs[i] && logs[i].data && logs[i].data.stage_in_name;
-    if (n) return n;
-  }
-  return `stage ${c.stage_id}`;
-}
-
-// ---- nguồn dữ liệu: danh sách ứng viên được chia sẻ ----
-
-// Trang /candidates/shared nặng ~280KB và mọi tool đều cần nó -> cache 60s trong process,
-// tránh gọi song song nhiều lần làm Base rớt kết nối.
-let sharedCache = null;
-let sharedInflight = null;
-const SHARED_TTL_MS = 60 * 1000;
-
-async function fetchShared() {
-  if (sharedCache && Date.now() - sharedCache.at < SHARED_TTL_MS) return sharedCache.value;
-  if (sharedInflight) return sharedInflight;
-  sharedInflight = (async () => {
-    const html = await getHiring("/candidates/shared");
-    const pd = extractPageData(html);
-    const value = { html, pd, candidates: pd.candidates || [] };
-    sharedCache = { at: Date.now(), value };
-    return value;
-  })();
-  try {
-    return await sharedInflight;
-  } finally {
-    sharedInflight = null;
-  }
-}
-
-function resolveCandidate(candidates, q) {
-  const s = String(q).trim();
-  let c = candidates.find((x) => String(x.id) === s);
-  if (c) return c;
+// Trả { raw, c, html, path }: raw = object gốc của Base (không trả thẳng ra ngoài), c = bản đã chuẩn hoá,
+// html/path = trang chứa ứng viên, dùng để lấy CSRF khi đọc bình luận.
+// Thứ tự tìm: tab Chia sẻ -> các job đang mở -> các job đã đóng (chỉ khi chưa thấy ai).
+async function findCandidate(query, openingQuery) {
+  const s = String(query).trim();
   const n = noAccent(s);
-  const matches = candidates.filter(
-    (x) => noAccent(x.name).includes(n) || noAccent(x.email || "").includes(n)
-  );
-  if (matches.length === 1) return matches[0];
-  if (matches.length > 1)
+  const isId = /^\d+$/.test(s);
+  const test = (c) =>
+    isId ? String(c.id) === s : noAccent(c.name).includes(n) || noAccent(c.email || "").includes(n);
+  const hits = new Map();
+
+  const shared = await D.fetchShared();
+  for (const raw of shared.candidates) {
+    if (!test(raw)) continue;
+    const ex = raw.opening_export || {};
+    const opening = { id: String(raw.opening_id), name: String(ex.name || ""), code: String(ex.codename || "") };
+    if (openingQuery && !D.matchOpening(opening, openingQuery)) continue;
+    const stages = D.normalizeStages(shared.stagesMaps[opening.id]);
+    hits.set(String(raw.id), { raw, c: D.normalizeCandidate(raw, stages, opening), html: shared.html, path: shared.path });
+  }
+
+  let scanned = 0;
+  const info = await D.fetchOpenings();
+  if (info.source === "openings" && !(isId && hits.size)) {
+    const pool = openingQuery ? info.openings.filter((o) => D.matchOpening(o, openingQuery)) : info.openings;
+    const scan = async (list) => {
+      for (const o of list) {
+        let data;
+        try {
+          data = await D.fetchOpening(o);
+        } catch {
+          continue; // job không mở được -> bỏ qua, tìm ở job khác
+        }
+        scanned++;
+        data.raw.forEach((raw, i) => {
+          if (test(raw) && !hits.has(String(raw.id)))
+            hits.set(String(raw.id), { raw, c: data.candidates[i], html: data.html, path: data.path });
+        });
+        if (isId && hits.size) return;
+      }
+    };
+    await scan(pool.filter((o) => !o.closed));
+    if (!hits.size) await scan(pool.filter((o) => o.closed));
+  }
+
+  const found = [...hits.values()];
+  if (found.length === 1) return found[0];
+  if (found.length > 1)
     throw new Error(
-      `"${q}" khớp nhiều ứng viên: ${matches.map((x) => `${x.name} (${x.id})`).join(", ")}. Nói rõ hơn.`
+      `"${query}" khớp nhiều ứng viên: ${found.map((h) => `${h.c.name} (id ${h.c.id}, job ${h.c.openingName || h.c.openingId})`).join("; ")}. Gọi lại bằng id.`
     );
   throw new Error(
-    `Không tìm thấy ứng viên "${q}" trong danh sách được chia sẻ với tài khoản này (${candidates.length} người). ` +
-      `Dùng hiring_list_candidates để xem danh sách. Ứng viên không được share thì tài khoản này không đọc được.`
+    `Không tìm thấy ứng viên "${query}"` +
+      (openingQuery ? ` trong job khớp "${openingQuery}"` : "") +
+      `. Đã tìm ở tab Chia sẻ (${shared.candidates.length} người)` +
+      (info.source === "openings"
+        ? ` và ${scanned} job tài khoản này xem được.`
+        : ". Tài khoản này không mở được trang Job nên chỉ đọc được ứng viên được chia sẻ.")
   );
 }
 
 // ---- tools ----
 
-async function toolListCandidates({ opening, query, stage } = {}) {
-  const { pd, candidates } = await fetchShared();
-  let list = candidates;
+async function toolListCandidates({ opening, query, stage, include_contact } = {}) {
+  const shared = await D.fetchShared();
+  let list = shared.candidates.map((raw) => {
+    const ex = raw.opening_export || {};
+    const o = { id: String(raw.opening_id), name: String(ex.name || ""), code: String(ex.codename || "") };
+    return D.normalizeCandidate(raw, D.normalizeStages(shared.stagesMaps[o.id]), o);
+  });
+  const all = list.length;
   if (opening) {
     const o = noAccent(opening);
-    list = list.filter((c) => noAccent((c.opening_export || {}).name || "").includes(o));
+    list = list.filter((c) => noAccent(c.openingName).includes(o));
   }
   if (stage) {
     const s = noAccent(stage);
-    list = list.filter((c) => noAccent(stageName(pd, c)).includes(s));
+    list = list.filter((c) => noAccent(c.stageName).includes(s));
   }
   if (query) {
     const q = noAccent(query);
-    list = list.filter((c) => noAccent(c.name).includes(q) || noAccent(c.title || "").includes(q));
+    list = list.filter((c) => noAccent(c.name).includes(q) || noAccent(c.title).includes(q));
   }
   if (!list.length) return "Không có ứng viên nào khớp bộ lọc.";
-  const head = `Ứng viên được chia sẻ với tài khoản này: ${list.length}/${candidates.length} (tổng trên Base: ${pd.total || "?"})`;
-  const rows = list.map((c) => {
-    const files = (c.uploaded_files || c.files || []).length;
-    const cmts = (c.stats || {}).comments || 0;
-    return (
+  const head =
+    `Ứng viên được chia sẻ với tài khoản này: ${list.length}/${all}\n` +
+    `(Chỉ gồm tab Chia sẻ. Xem toàn bộ ứng viên của một job: hiring_pipeline.)`;
+  const rows = list.map(
+    (c) =>
       `- ${c.name} — id ${c.id}\n` +
-      `  Tin tuyển dụng: ${(c.opening_export || {}).name || "?"}\n` +
-      `  Vòng: ${stageName(pd, c)}\n` +
-      `  Hiện tại: ${c.title || "-"} · ${c.email || "-"} · ${c.phone || "-"}\n` +
-      `  Nguồn: ${c.source || "-"} · Nộp: ${fmtTime(c.since)} · File: ${files} · Bình luận: ${cmts}`
-    );
-  });
+      `  Tin tuyển dụng: ${c.openingName || "?"}\n` +
+      `  Vòng: ${c.stageName}\n` +
+      `  Hiện tại: ${c.title || "-"}` +
+      (include_contact === true ? ` · ${c.contact.email || "-"} · ${c.contact.phone || "-"}` : "") +
+      `\n  Nguồn: ${c.source || "-"} · Nộp: ${fmtTime(c.applied)} · File: ${c.files} · Bình luận: ${c.comments}`
+  );
   return head + "\n" + rows.join("\n");
 }
 
-async function toolGetCandidate({ candidate }) {
+function filesOf(raw) {
+  return raw.uploaded_files || raw.files || [];
+}
+
+async function toolGetCandidate({ candidate, opening, include_contact } = {}) {
   if (!candidate) throw new Error("Thiếu tham số candidate (id hoặc tên).");
-  const { pd, candidates } = await fetchShared();
-  const c = resolveCandidate(candidates, candidate);
-  const files = c.uploaded_files || c.files || [];
-  const logs = (c.changelogs || []).slice(-8);
+  const { raw, c } = await findCandidate(candidate, opening);
+  const files = filesOf(raw);
+  const logs = (raw.changelogs || []).slice(-8);
   return [
     `${c.name} — id ${c.id}`,
-    `Tin tuyển dụng: ${(c.opening_export || {}).name || "?"} (opening ${c.opening_id})`,
-    `Vòng hiện tại: ${stageName(pd, c)}`,
-    `Email: ${c.email || "-"} · Điện thoại: ${c.phone || "-"}`,
+    `Tin tuyển dụng: ${c.openingName || "?"} (opening ${c.openingId})`,
+    `Vòng hiện tại: ${c.stageName}`,
+    contactLine(c, include_contact === true),
     `Vị trí hiện tại: ${c.title || "-"}`,
-    `Nguồn: ${c.source || "-"} · Người tạo: ${c.username || "-"} · Nộp: ${fmtTime(c.since)}`,
-    `Cập nhật cuối: ${fmtTime(c.last_update)}`,
-    `Bình luận: ${(c.stats || {}).comments || 0} (đọc bằng hiring_get_comments)`,
+    `Nguồn: ${c.source || "-"} · Người tạo: ${raw.username || "-"} · Nộp: ${fmtTime(c.applied)}`,
+    `Cập nhật cuối: ${fmtTime(c.lastUpdate)}`,
+    c.interview ? `Lịch phỏng vấn gần nhất: ${fmtTime(c.interview.time)} (${c.interview.type || "?"})` : "",
+    `Bình luận: ${c.comments} (đọc bằng hiring_get_comments)`,
     "",
     files.length ? "File đính kèm:" : "File đính kèm: không có",
     ...files.map((f, i) => `  [${i}] ${f.name} (${Math.round((f.size || 0) / 1024)} KB, up bởi ${f.username}, ${fmtTime(f.since)})`),
     "",
     logs.length ? "Lịch sử gần đây:" : "",
-    ...logs.map((l) => `  ${fmtTime(l.since)} — ${decodeHtml(l.name)}`),
+    // dòng lịch sử của Base có thể chứa email ứng viên -> che khi không bật include_contact
+    ...logs.map((l) => {
+      const line = decodeHtml(l.name);
+      return `  ${fmtTime(l.since)} — ${include_contact === true ? line : line.replace(/\s*\(?[\w.+-]+@[\w-]+(\.[\w-]+)+\)?/g, "")}`;
+    }),
   ]
     .filter((x) => x !== "")
     .join("\n");
 }
 
-async function loadComments(c, html) {
-  const code = extractToken(html, "code");
-  const otp = extractToken(html, "otp");
+async function loadComments(hit) {
+  const code = D.extractToken(hit.html, "code");
+  const otp = D.extractToken(hit.html, "otp");
   if (!code || !otp) throw new Error("Không lấy được CSRF token từ trang hiring — cookie có thể sắp hết hạn.");
-  const cfg = loadConfig();
+  if (!hit.raw.hid || !hit.raw.token)
+    throw new Error("Base không trả `hid` / `token` cho ứng viên này ở trang job, nên không đọc được bình luận.");
+  const cfg = D.loadConfig();
   const body = new URLSearchParams({
-    hid: c.hid,
-    token: c.token,
+    hid: hit.raw.hid,
+    token: hit.raw.token,
     __code: code,
-    __sessionid: basessid(),
+    __sessionid: D.basessid(),
     __otp: otp,
   });
-  const res = await fetch(hiringUrl() + "/ajax/api/comment/load", {
+  // Endpoint này chỉ ĐỌC bình luận (comment/load), không ghi gì lên Base.
+  const res = await fetch(D.hiringUrl() + "/ajax/api/comment/load", {
     method: "POST",
     headers: {
       cookie: cfg.cookie,
-      "user-agent": UA,
-      origin: hiringUrl(),
-      referer: hiringUrl() + "/candidates/shared",
+      "user-agent": D.UA,
+      origin: D.hiringUrl(),
+      referer: D.hiringUrl() + hit.path,
       "content-type": "application/x-www-form-urlencoded",
     },
     body: body.toString(),
@@ -286,25 +185,23 @@ async function loadComments(c, html) {
   }
 }
 
-async function toolGetComments({ candidate }) {
+async function toolGetComments({ candidate, opening } = {}) {
   if (!candidate) throw new Error("Thiếu tham số candidate (id hoặc tên).");
-  let shared = await fetchShared();
-  let c = resolveCandidate(shared.candidates, candidate);
-  let data = await loadComments(c, shared.html);
+  let hit = await findCandidate(candidate, opening);
+  let data = await loadComments(hit);
   // CSRF trong cache có thể đã cũ -> bỏ cache, lấy trang mới, thử lại đúng 1 lần
   if (!data || Number(data.code) !== 1) {
-    sharedCache = null;
-    shared = await fetchShared();
-    c = resolveCandidate(shared.candidates, candidate);
-    data = await loadComments(c, shared.html);
+    D.dropCache();
+    hit = await findCandidate(candidate, opening);
+    data = await loadComments(hit);
   }
   if (!data || Number(data.code) !== 1)
     throw new Error(`Base từ chối đọc bình luận (code ${data && data.code}, message ${data && data.message}).`);
+  const c = hit.c;
   const comments = data.comments || [];
-  const counter = Number((c.stats || {}).comments || 0);
   const note =
-    counter > comments.length
-      ? `\n(Base đếm ${counter} bình luận nhưng API chỉ trả ${comments.length} — phần chênh thường là bình luận đã xoá.)`
+    c.comments > comments.length
+      ? `\n(Base đếm ${c.comments} bình luận nhưng API chỉ trả ${comments.length} — phần chênh thường là bình luận đã xoá.)`
       : "";
   if (!comments.length) return `${c.name} (id ${c.id}): chưa có bình luận nào.${note}`;
   return (
@@ -321,38 +218,20 @@ async function toolGetComments({ candidate }) {
   );
 }
 
-function pdftotext(file) {
-  const bins = ["/opt/homebrew/bin/pdftotext", "/usr/local/bin/pdftotext", "pdftotext"];
-  for (const bin of bins) {
-    try {
-      return execFileSync(bin, ["-layout", file, "-"], {
-        encoding: "utf8",
-        maxBuffer: 32 * 1024 * 1024,
-      });
-    } catch (e) {
-      if (e && (e.code === "ENOENT" || e.code === 127)) continue;
-      throw new Error(`pdftotext lỗi: ${e.message}`);
-    }
-  }
-  return null;
-}
-
-function textutil(file) {
+// Chỉ gửi cookie tới máy chủ của Base.
+function isBaseHost(url) {
   try {
-    return execFileSync("/usr/bin/textutil", ["-convert", "txt", "-stdout", file], {
-      encoding: "utf8",
-      maxBuffer: 32 * 1024 * 1024,
-    });
+    const h = new URL(url).hostname;
+    return /(^|\.)base\.vn$/.test(h) || /(^|\.)basecdn\.net$/.test(h);
   } catch {
-    return null;
+    return false;
   }
 }
 
-async function toolReadCv({ candidate, file_index, max_chars }) {
+async function toolReadCv({ candidate, opening, file_index, max_chars, save_file } = {}) {
   if (!candidate) throw new Error("Thiếu tham số candidate (id hoặc tên).");
-  const { candidates } = await fetchShared();
-  const c = resolveCandidate(candidates, candidate);
-  const files = c.uploaded_files || c.files || [];
+  const { raw, c } = await findCandidate(candidate, opening);
+  const files = filesOf(raw);
   if (!files.length) return `${c.name} (id ${c.id}): không có file đính kèm nào.`;
 
   let f;
@@ -362,42 +241,37 @@ async function toolReadCv({ candidate, file_index, max_chars }) {
   } else {
     f = files.find((x) => /\.pdf$/i.test(x.name || "")) || files[0];
   }
+  if (!isBaseHost(f.full_url)) throw new Error("Link file không nằm trên máy chủ của Base, không tải.");
 
-  const cfg = loadConfig();
   const res = await fetch(f.full_url, {
-    headers: { cookie: cfg.cookie, "user-agent": UA },
+    headers: { cookie: D.loadConfig().cookie, "user-agent": D.UA },
     redirect: "follow",
   });
-  if (!res.ok) throw new Error(`Tải file thất bại (HTTP ${res.status}). Link: ${f.download_url || f.full_url}`);
+  if (!res.ok) throw new Error(`Tải file thất bại (HTTP ${res.status}).`);
   const buf = Buffer.from(await res.arrayBuffer());
-  const tmp = path.join(os.tmpdir(), `base-hiring-${c.id}-${(f.name || "file").replace(/[^\w.-]/g, "_")}`);
-  fs.writeFileSync(tmp, buf);
 
   const others = files.length > 1
     ? `\nFile khác: ${files.map((x, i) => `[${i}] ${x.name}`).filter((_, i) => files[i] !== f).join(", ")} (đọc bằng file_index)`
     : "";
   const header = `CV của ${c.name} (id ${c.id}) — file "${f.name}", ${Math.round((f.size || buf.length) / 1024)} KB${others}\n${"-".repeat(60)}\n`;
 
-  let text = null;
-  try {
-    // Có file Base trả về dư vài byte trước "%PDF" (đã gặp với một CV thật),
-    // nên dò chữ ký trong 1KB đầu thay vì so khớp đúng offset 0.
-    const isPdf = buf.slice(0, 1024).toString("latin1").includes("%PDF");
-    if (isPdf) text = pdftotext(tmp);
-    else if (/\.(docx?|rtf|txt|html?)$/i.test(f.name || "")) text = textutil(tmp);
-  } finally {
-    // luôn xoá file tạm: đây là CV của ứng viên, không để rơi lại trong /tmp
-    try {
-      fs.unlinkSync(tmp);
-    } catch {}
+  if (save_file === true) {
+    const dir = path.join(os.tmpdir(), "base-hiring-cv");
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const out = path.join(dir, `${c.id}-${String(f.name || "file").replace(/[^\w.-]/g, "_")}`);
+    fs.writeFileSync(out, buf, { mode: 0o600 });
+    return header + `Đã lưu file tại: ${out}\nĐọc file này bằng tool đọc file. Đây là CV của ứng viên: xoá file sau khi đọc xong.`;
   }
 
+  const text = await extractText(buf, f.name);
   if (!text || !text.trim()) {
     return (
       header +
-      `Không tách được text từ file này (không phải PDF text, hoặc thiếu pdftotext/textutil).\n` +
-      `Cài pdftotext: brew install poppler\n` +
-      `Tải trực tiếp: ${f.download_url || f.full_url}`
+      "Không tách được text từ file này trên máy đang chạy.\n" +
+      "Cách xử lý, chọn một:\n" +
+      "- Gọi lại với save_file=true để lưu file ra máy rồi đọc trực tiếp (dùng được trên mọi hệ điều hành, kể cả PDF scan).\n" +
+      "- PDF: chạy `npm install` trong thư mục MCP để cài pdf-parse (Windows, Linux, macOS), hoặc cài poppler (macOS: `brew install poppler`).\n" +
+      "- File .doc / .rtf chỉ tách được trên macOS."
     );
   }
   const limit = Number(max_chars) > 0 ? Number(max_chars) : 25000;
@@ -405,17 +279,21 @@ async function toolReadCv({ candidate, file_index, max_chars }) {
   return header + (clean.length > limit ? clean.slice(0, limit) + `\n\n[... cắt bớt, còn ${clean.length - limit} ký tự. Tăng max_chars để đọc tiếp]` : clean);
 }
 
+const CANDIDATE_DESC = "Id ứng viên (vd '123456') hoặc tên (vd 'Nguyen Van A')";
+const OPENING_DESC = "Tuỳ chọn: giới hạn tìm trong một job (id, mã job, hoặc một phần tên). Dùng khi tên bị trùng hoặc muốn tìm nhanh hơn.";
+
 const HIRING_TOOLS = [
   {
     name: "hiring_list_candidates",
     description:
-      "Liệt kê ứng viên trên Base Hiring mà tài khoản này được chia sẻ (tab CHIA SẺ) — tên, id, tin tuyển dụng, vòng hiện tại, nguồn, số file, số bình luận. Lọc được theo tin tuyển dụng / vòng / tên.",
+      "Liệt kê ứng viên trên Base Hiring mà tài khoản này được chia sẻ (tab CHIA SẺ) — tên, id, tin tuyển dụng, vòng hiện tại, nguồn, số file, số bình luận. Lọc được theo tin tuyển dụng / vòng / tên. Muốn xem mọi ứng viên của một job thì dùng hiring_pipeline. Mặc định không trả email / số điện thoại.",
     inputSchema: {
       type: "object",
       properties: {
         opening: { type: "string", description: "Lọc theo tên tin tuyển dụng, vd 'AI-First', 'Cyber Security'" },
         stage: { type: "string", description: "Lọc theo vòng, vd 'Rejected', 'Technical Interview'" },
         query: { type: "string", description: "Lọc theo tên ứng viên hoặc công ty hiện tại" },
+        include_contact: { type: "boolean", description: "true = trả thêm email và số điện thoại. Chỉ bật khi người dùng hỏi." },
       },
       required: [],
     },
@@ -424,11 +302,13 @@ const HIRING_TOOLS = [
   {
     name: "hiring_get_candidate",
     description:
-      "Xem hồ sơ một ứng viên trên Base Hiring: liên hệ, tin tuyển dụng, vòng hiện tại, nguồn, danh sách file đính kèm (kèm index để đọc CV), lịch sử chuyển vòng.",
+      "Xem hồ sơ một ứng viên trên Base Hiring, ở bất kỳ job nào tài khoản có quyền xem (không chỉ tab Chia sẻ): tin tuyển dụng, vòng hiện tại, nguồn, danh sách file đính kèm (kèm index để đọc CV), lịch sử chuyển vòng. Mặc định không trả email / số điện thoại.",
     inputSchema: {
       type: "object",
       properties: {
-        candidate: { type: "string", description: "Id ứng viên (vd '123456') hoặc tên (vd 'Nguyen Van A')" },
+        candidate: { type: "string", description: CANDIDATE_DESC },
+        opening: { type: "string", description: OPENING_DESC },
+        include_contact: { type: "boolean", description: "true = trả thêm email và số điện thoại. Chỉ bật khi người dùng hỏi." },
       },
       required: ["candidate"],
     },
@@ -437,13 +317,15 @@ const HIRING_TOOLS = [
   {
     name: "hiring_read_cv",
     description:
-      "Đọc nội dung CV của một ứng viên trên Base Hiring — tải file đính kèm rồi tách text (PDF qua pdftotext). Mặc định lấy file PDF đầu tiên.",
+      "Đọc nội dung CV của một ứng viên trên Base Hiring, ở bất kỳ job nào tài khoản có quyền xem — tải file đính kèm rồi tách text (PDF, DOCX). Mặc định lấy file PDF đầu tiên. Không tách được text (PDF scan, máy thiếu công cụ) thì gọi lại với save_file=true để lấy đường dẫn file rồi đọc trực tiếp.",
     inputSchema: {
       type: "object",
       properties: {
-        candidate: { type: "string", description: "Id ứng viên hoặc tên" },
+        candidate: { type: "string", description: CANDIDATE_DESC },
+        opening: { type: "string", description: OPENING_DESC },
         file_index: { type: "number", description: "Index file cần đọc (xem hiring_get_candidate). Bỏ trống = file PDF đầu tiên." },
         max_chars: { type: "number", description: "Số ký tự tối đa trả về, mặc định 25000" },
+        save_file: { type: "boolean", description: "true = không tách text, lưu file vào thư mục tạm và trả đường dẫn để đọc trực tiếp." },
       },
       required: ["candidate"],
     },
@@ -452,16 +334,18 @@ const HIRING_TOOLS = [
   {
     name: "hiring_get_comments",
     description:
-      "Đọc các bình luận (nhận xét nội bộ) về một ứng viên trên Base Hiring — ai viết, lúc nào, nội dung.",
+      "Đọc các bình luận (nhận xét nội bộ) về một ứng viên trên Base Hiring, ở bất kỳ job nào tài khoản có quyền xem — ai viết, lúc nào, nội dung.",
     inputSchema: {
       type: "object",
       properties: {
-        candidate: { type: "string", description: "Id ứng viên hoặc tên" },
+        candidate: { type: "string", description: CANDIDATE_DESC },
+        opening: { type: "string", description: OPENING_DESC },
       },
       required: ["candidate"],
     },
     handler: toolGetComments,
   },
+  ...HIRING_REPORT_TOOLS,
 ];
 
-module.exports = { HIRING_TOOLS };
+module.exports = { HIRING_TOOLS, findCandidate };
