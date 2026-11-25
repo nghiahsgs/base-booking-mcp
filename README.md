@@ -44,8 +44,10 @@ Tool sẽ báo lỗi "Cookie Base có vẻ đã hết hạn". Cách thay:
 
 1. Mở https://booking.base.vn/home trong Chrome (đang đăng nhập).
 2. DevTools > Network > chọn request bất kỳ tới booking.base.vn > Request Headers > copy toàn bộ giá trị header `cookie`.
-3. Dán vào trường `"cookie"` trong `config.json` (cùng thư mục này).
+3. Chạy `node set-cookie.js`. Script đọc cookie từ clipboard (macOS), gọi thử Base, cookie sống thì mới ghi vào `config.json`. Hệ điều hành khác: dán qua stdin, vd `xclip -o -selection clipboard | node set-cookie.js -`.
 4. Restart Claude Code (hoặc `/mcp` > reconnect).
+
+Script không in cookie ra màn hình. Muốn làm tay thì dán cookie vào trường `"cookie"` trong `config.json`.
 
 CSRF token (`__code`, `__otp`) không cần cập nhật — server tự fetch fresh từ HTML mỗi lần gọi.
 
@@ -88,7 +90,7 @@ Code ở `hiring.js`, `server.js` chỉ nối `...HIRING_TOOLS` vào mảng `TOO
 Cần Node 18+ (dùng `fetch` có sẵn, không có dependency). `hiring_read_cv` cần thêm `pdftotext` (`brew install poppler`).
 
 1. `git clone` repo này.
-2. `cp config.example.json config.json`, dán cookie Base của bạn vào trường `cookie` (xem mục "Khi cookie hết hạn").
+2. Đăng nhập https://booking.base.vn/home, copy giá trị header `cookie` trong DevTools (xem mục "Khi cookie hết hạn"), rồi chạy `node set-cookie.js`. Script tự tạo `config.json`.
 3. Đăng ký với Claude Code: `claude mcp add base-booking --scope user -- node /đường/dẫn/tới/server.js`.
 
 `config.json` chứa cookie đăng nhập nên đã nằm trong `.gitignore`. Không commit file này.
