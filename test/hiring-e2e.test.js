@@ -40,7 +40,8 @@ const PAGES = {
     ],
   },
   "/opening/100": {
-    stages,
+    // chỉ có id + tên, không có state: tool phải bù state từ stats của job
+    stages: stages.map(({ id, name }) => ({ id, name })),
     candidates: [
       cand("11", "Nguyễn Văn Giả", "1", 30, 20),
       cand("12", "Trần Thị Thử", "2", 3, 1, { interview: { id: "500", metatype: "online", time: now + DAY, location: "Teams", candidate_id: "12" } }),

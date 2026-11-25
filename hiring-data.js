@@ -301,7 +301,9 @@ function normalizeCandidate(c, stages, opening) {
     lastUpdate: num(c.last_update) || (last && last.time) || since,
     stageId: String(c.stage_id || ""),
     stageName: st ? st.name : last ? last.to : `stage ${c.stage_id}`,
-    state: st ? st.state : last ? last.toState : "",
+    // Vòng không kèm state (Base đổi dạng dữ liệu) -> lấy state từ lần chuyển vòng gần nhất.
+    // Vẫn rỗng thì bên gọi phải ghi chú, vì rỗng được coi là "đang xử lý".
+    state: (st && st.state) || (last && last.toState) || "",
     openingId: String(c.opening_id || (opening && opening.id) || ""),
     openingName: (opening && opening.name) || String((c.opening_export && c.opening_export.name) || ""),
     moves,
@@ -434,22 +436,22 @@ function fetchOpening(opening) {
         for (const c of fresh) byId.set(String(c.id), c);
       }
       const raw = [...byId.values()];
+      const statStages = opening.stats ? opening.stats.stages : [];
       let stages = normalizeStages(pd.stages);
-      if (!stages.length && opening.stats) stages = opening.stats.stages.map(({ id, name, state }) => ({ id, name, state }));
+      if (!stages.length) stages = statStages.map(({ id, name, state }) => ({ id, name, state }));
+      // `stages[]` của trang job thiếu state -> bù từ stats của job (cùng id vòng)
+      stages = stages.map((s) => (s.state ? s : { ...s, state: (statStages.find((x) => x.id === s.id) || {}).state || "" }));
       if (opening.stats && raw.length < opening.stats.total)
         notes.push(
           `Base báo job có ${opening.stats.total} ứng viên nhưng trang job chỉ trả ${raw.length}. Số liệu chi tiết có thể thiếu.`
         );
-      return {
-        opening,
-        stages,
-        raw,
-        candidates: raw.map((c) => normalizeCandidate(c, stages, opening)),
-        html,
-        path: urlPath,
-        partial: false,
-        notes,
-      };
+      const candidates = raw.map((c) => normalizeCandidate(c, stages, opening));
+      const unknown = candidates.filter((c) => !c.state).length;
+      if (unknown)
+        notes.push(
+          `Base không trả trạng thái vòng cho ${unknown} ứng viên, nên các ứng viên này đang được tính là "đang xử lý" (có thể gồm cả người đã bị loại).`
+        );
+      return { opening, stages, raw, candidates, html, path: urlPath, partial: false, notes };
     }
 
     // Không mở được trang job -> chỉ còn các ứng viên được chia sẻ riêng với tài khoản này.

@@ -41,7 +41,13 @@ async function findCandidate(query, openingQuery) {
   }
 
   let scanned = 0;
-  const info = await D.fetchOpenings();
+  // Trang Job lỗi (Base đổi layout) thì vẫn phải đọc được ứng viên ở tab Chia sẻ.
+  let info;
+  try {
+    info = await D.fetchOpenings();
+  } catch {
+    info = { source: "shared", openings: [] };
+  }
   if (info.source === "openings" && !(isId && hits.size)) {
     const pool = openingQuery ? info.openings.filter((o) => D.matchOpening(o, openingQuery)) : info.openings;
     const scan = async (list) => {

@@ -168,6 +168,19 @@ test("hiring_pipeline: nhóm theo vòng, bỏ Rejected, đánh dấu đọng, �
   assert.doesNotMatch(withContact, /012345678901|SECRET-TOKEN/);
 });
 
+test("vòng không có state: lấy state từ lần chuyển vòng gần nhất", () => {
+  const nameOnly = D.normalizeStages(STAGES.map(({ id, name }) => ({ id, name })));
+  const o = D.normalizeOpening(rawOpening());
+  const rejected = rawCandidate("6", "Ứng Viên Bị Loại", STAGES[4], at("05/11/2026"), at("23/11/2026"), {
+    changelogs: [move(at("05/11/2026"), null, STAGES[0]), move(at("23/11/2026"), STAGES[0], STAGES[4])],
+  });
+  const c = D.normalizeCandidate(rejected, nameOnly, o);
+  assert.strictEqual(c.stageName, "Rejected");
+  assert.strictEqual(D.bucket(c.state), "rejected");
+  // không có cả changelog -> state rỗng, bên gọi phải ghi chú
+  assert.strictEqual(D.normalizeCandidate({ ...rejected, changelogs: [] }, nameOnly, o).state, "");
+});
+
 test("hiring_pipeline: cảnh báo job đã đóng còn ứng viên treo", () => {
   const text = R.buildPipeline([openingData({ status: "-1" })], { now: NOW });
   assert.match(text, /CẢNH BÁO: job đã đóng nhưng còn 4 ứng viên chưa chuyển sang Rejected/);
