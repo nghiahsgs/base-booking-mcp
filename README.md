@@ -1,4 +1,4 @@
-# base-mcp
+# base-vn-mcp
 
 MCP server nói chuyện với Base (base.vn), đăng ký global (user scope) cho Claude Code và OpenCode. Ba mảng:
 
@@ -91,6 +91,6 @@ Cần Node 18+ (dùng `fetch` có sẵn, không có dependency). `hiring_read_cv
 
 1. `git clone` repo này.
 2. Đăng nhập https://booking.base.vn/home, copy giá trị header `cookie` trong DevTools (xem mục "Khi cookie hết hạn"), rồi chạy `node set-cookie.js`. Script tự tạo `config.json`.
-3. Đăng ký với Claude Code: `claude mcp add base --scope user -- node /đường/dẫn/tới/server.js`.
+3. Đăng ký với Claude Code: `claude mcp add base-vn --scope user -- node /đường/dẫn/tới/server.js`.
 
 `config.json` chứa cookie đăng nhập nên đã nằm trong `.gitignore`. Không commit file này.
