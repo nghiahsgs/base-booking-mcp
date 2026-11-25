@@ -415,7 +415,7 @@ async function handle(line) {
       result: {
         protocolVersion: params?.protocolVersion || "2024-11-05",
         capabilities: { tools: {} },
-        serverInfo: { name: "base-booking", version: "1.0.0" },
+        serverInfo: { name: "base-vn", version: "1.0.0" },
       },
     });
   } else if (method === "tools/list") {

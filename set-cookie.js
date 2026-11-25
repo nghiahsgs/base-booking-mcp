@@ -79,5 +79,5 @@ async function check(baseUrl, cookie) {
   fs.writeFileSync(CONFIG_PATH, JSON.stringify({ ...cfg, cookie: result.cookie }, null, 2) + "\n", { mode: 0o600 });
   fs.chmodSync(CONFIG_PATH, 0o600);
   console.log("Cookie hợp lệ, đã ghi vào " + CONFIG_PATH + ".");
-  console.log("Bước tiếp theo: restart Claude Code, hoặc gõ /mcp rồi reconnect base-booking.");
+  console.log("Bước tiếp theo: restart Claude Code, hoặc gõ /mcp rồi reconnect base-vn.");
 })();
